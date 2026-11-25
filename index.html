@@ -1,6 +1,6 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!DOCTYPE html>
+<html lang="he" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ניהול כספי הדפוס</title>
-<meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;500;600;700&family=Rubik:wght@500;600;700&display=swap">
 <style>
@@ -150,7 +150,8 @@ tfoot td{font-weight:700;background:var(--surface2)}
   .grid .span2{grid-column:auto}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
-</style>
+body{margin:0}
+</style></head><body>
 
 <div class="app">
   <aside class="rail">
@@ -261,38 +262,29 @@ function mergeSettings(s){const d=clone(DEFAULTS);s=s||{};const out=Object.assig
   if(!Array.isArray(out.finishings))out.finishings=clone(DEFAULTS.finishings);return out}
 const ST=()=>S.settings;
 const all=c=>Object.values(S[c]);
-function saveLocal(){try{localStorage.setItem(LKEY,JSON.stringify(S))}catch(e){}}
-function loadLocal(){try{const j=JSON.parse(localStorage.getItem(LKEY)||'null');if(j){COLS.forEach(c=>S[c]=j[c]||{});S.settings=mergeSettings(j.settings)}}catch(e){}}
-async function put(col,obj){
-  obj=clone(obj);S[col][obj.id]=obj;schedule();
-  if(mode==='cloud'){try{await db.collection(col).doc(obj.id).set(obj)}catch(e){toast(e&&e.code==='quota_exceeded'?'המאגר מלא. מחק רשומות ישנות ונסה שוב.':'השמירה נכשלה. בדוק חיבור ונסה שוב.')}}
-  else saveLocal();
+/* The site reads and writes the Google Sheet through the Apps Script web app at API_URL. Inside Apps Script itself it uses google.script.run. */
+const API_URL='https://script.google.com/macros/s/AKfycbxq4DyvCD90M_HW-uKxd97l_zd-t75TqlkRWO-Gx42qc2_7-OD68xH37VYP9mQdAIEV/exec';
+const IN_GAS=!!(window.google&&google.script&&google.script.run);
+let lastSync=0,busy=0;
+function call(fn,...args){
+  if(IN_GAS)return new Promise((res,rej)=>{busy++;google.script.run.withSuccessHandler(v=>{busy--;res(v)}).withFailureHandler(e=>{busy--;rej(e)})[fn](...args)});
+  busy++;
+  return fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:fn,args})})
+    .then(r=>r.json()).then(j=>{busy--;if(!j||!j.ok)throw new Error(j&&j.error||'שגיאה');return j.result},e=>{busy--;throw new Error(e&&e.message&&!/fetch|JSON/i.test(e.message)?e.message:'אין חיבור לגיליון')});
 }
-async function del(col,id){
-  delete S[col][id];schedule();
-  if(mode==='cloud'){try{await db.collection(col).doc(id).delete()}catch(e){toast('המחיקה נכשלה')}}else saveLocal();
-}
-async function saveSettings(s){
-  S.settings=mergeSettings(s);schedule();
-  if(mode==='cloud'){try{await db.doc('config/settings').set(clone(S.settings))}catch(e){toast('שמירת ההגדרות נכשלה')}}else saveLocal();
-}
-async function initStore(){
-  let api=null;
-  try{api=window.claude&&window.claude.use?await window.claude.use('db'):null}catch(e){api=null}
-  if(!api){mode='local';loadLocal();setStoreState();render();return}
-  db=api;mode='cloud';
-  const timer=setTimeout(()=>{if(Object.keys(loaded).length<COLS.length+1){$('#storeState').textContent='המאגר לא עונה עדיין. הנתונים עשויים להיות חלקיים.'}},10000);
-  const done=k=>{loaded[k]=1;if(Object.keys(loaded).length>=COLS.length+1){clearTimeout(timer);setStoreState()}};
-  COLS.forEach(c=>{
-    db.collection(c).onSnapshot(snap=>{const m={};snap.docs.forEach(d=>{m[d.id]=Object.assign({},d.data(),{id:d.id})});S[c]=m;if(!snap.metadata.fromCache)done(c);schedule()},
-      err=>{done(c);$('#storeState').textContent='שגיאה בטעינת נתונים ('+(err&&err.code||'')+')'});
-  });
-  db.doc('config/settings').onSnapshot(s=>{S.settings=mergeSettings(s.exists?s.data():null);if(!s.metadata.fromCache)done('settings');schedule()},()=>done('settings'));
-  setStoreState();
-}
-function setStoreState(){
-  $('#storeState').textContent=mode==='cloud'?'הנתונים נשמרים אוטומטית בענן':mode==='local'?'מצב מקומי: נשמר בדפדפן זה בלבד':'טוען נתונים…';
-}
+function serialize(col,o){o=clone(o);if(col==='docs'){o.net=o.type==='400'?'':docNet(o);o.vat=o.type==='400'?'':docVat(o);o.total=docTotal(o);o.typeName=DT[o.type].name}
+  if(col==='jobs')o.customerName=custName(o.customerId);if(col==='expenses'&&o.supplierId)o.supplierName=(S.suppliers[o.supplierId]||{}).name||o.supplierName;return o}
+async function put(col,obj){obj=clone(obj);S[col][obj.id]=obj;schedule();
+  try{await call('saveRecord',col,serialize(col,obj))}catch(e){toast('השמירה בגיליון נכשלה: '+(e&&e.message||'')) }}
+async function del(col,id){delete S[col][id];schedule();try{await call('deleteRecord',col,id)}catch(e){toast('המחיקה נכשלה')}}
+async function saveSettings(s){S.settings=mergeSettings(s);schedule();try{await call('saveSettings',clone(S.settings))}catch(e){toast('שמירת ההגדרות נכשלה')}}
+function applyData(d){COLS.forEach(c=>{const m={};(d[c]||[]).forEach(o=>{m[o.id]=o});S[c]=m});S.settings=mergeSettings(d.settings);S.user=d.user||'';S.sheetUrl=d.sheetUrl||'';lastSync=Date.now()}
+async function refresh(manual){if(busy&&!manual)return;try{const d=await call('getAll');if(busy&&!manual)return;applyData(d);mode='cloud';setStoreState();schedule();if(manual===true&&lastSync)toast('הנתונים עודכנו מהגיליון')}catch(e){mode='error';setStoreState(e)}}
+async function initStore(){await refresh(1);
+  setInterval(()=>{if(document.visibilityState==='visible'&&$('#modal').hidden&&!(document.activeElement&&/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)))refresh()},30000)}
+function setStoreState(e){const el=$('#storeState');
+  if(mode==='error'){el.innerHTML='לא ניתן לקרוא מהגיליון. '+esc(e&&e.message||'')+' <button class="btn sm" data-act="refresh">נסה שוב</button>';return}
+  el.innerHTML=mode==='cloud'?`מחובר לגיליון${S.user?' · '+esc(S.user):''}<br><button class="btn sm ghost" data-act="refresh" style="color:var(--rail-ink);padding-inline:0">רענון</button> ${S.sheetUrl?`<a class="btn sm ghost" href="${esc(S.sheetUrl)}" target="_blank" rel="noopener" style="color:var(--rail-ink)">פתיחת הגיליון</a>`:''}`:'טוען נתונים מהגיליון…'}
 let _raf=0;function schedule(){if(_raf)return;_raf=requestAnimationFrame(()=>{_raf=0;renderBody();renderNav();renderBrand()})}
 
 /* ---------- calculations ---------- */
@@ -319,12 +311,11 @@ function vatPeriodOf(dateStr){const d=parseD(dateStr);const y=d.getFullYear(),m=
 function periodLabel(p){return p.from===p.to?MONTHS[p.from]+' '+p.y:MONTHS[p.from]+'–'+MONTHS[p.to]+' '+p.y}
 
 /* ---------- downloads ---------- */
-async function saveFile(filename,content,type){
-  let dl=null;try{dl=window.claude&&window.claude.use?await window.claude.use('downloads'):null}catch(e){}
-  if(dl){try{await dl.save({filename,data:content});toast('הקובץ נשמר');return}catch(e){if(e&&e.code==='declined')return;}}
-  openModal('העתקת התוכן',`<p class="note">לא ניתן להוריד קובץ בתצוגה הזו. אפשר להעתיק את התוכן ולהדביק אותו בקובץ חדש (${esc(filename)}).</p><textarea id="cpy" style="min-height:260px;direction:ltr">${esc(content)}</textarea><div class="mfoot"><button class="btn pri" data-act="copyta">העתק</button></div>`);
-}
-function csv(rows){return '﻿'+rows.map(r=>r.map(v=>{v=v==null?'':String(v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v}).join(',')).join('\r\n')}
+async function saveFile(name,rows){if(!Array.isArray(rows))return;toast('יוצר לשונית דוח…');
+  try{const nm=name.replace(/\.csv$/,'');const url=await call('writeReport',nm,rows);openModal('הדוח נוצר בגיליון',`<p>הדוח "${esc(nm)}" נכתב ללשונית בגיליון (גרסה קודמת של אותו דוח מוחלפת). משם אפשר להוריד אותו כ־Excel או PDF דרך קובץ ← הורדה.</p><div class="mfoot"><a class="btn pri" href="${esc(url)}" target="_blank" rel="noopener">פתיחת הלשונית</a></div>`)}catch(e){toast('יצירת הדוח נכשלה')}}
+function printHTML(title,body){const w=window.open('','_blank');if(!w){toast('הדפדפן חסם חלון חדש. אפשר חלונות קופצים ונסה שוב.');return}
+  w.document.write(`<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>${esc(title)}</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600;700&display=swap"><style>body{margin:30px;font-family:Assistant,Arial,sans-serif}@media print{body{margin:12mm}}</style></head><body>${body}<script>setTimeout(function(){window.print()},700)<\/script></body></html>`);w.document.close()}
+function csv(rows){return rows.map(r=>r.map(v=>v==null?'':v))}
 async function copyText(t){try{await navigator.clipboard.writeText(t);toast('הועתק')}catch(e){openModal('העתקה',`<textarea id="cpy" style="min-height:220px">${esc(t)}</textarea><p class="note">סמן והעתק ידנית.</p>`);setTimeout(()=>{const x=$('#cpy');x&&x.select()},50)}}
 
 /* ---------- modal ---------- */
@@ -336,8 +327,9 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#modal').hidden
 const VIEWS=[['dashboard','לוח בקרה'],['jobs','עבודות והזמנות'],['quote','מחשבון הצעת מחיר'],['docs','חשבוניות וקבלות'],['customers','לקוחות'],['expenses','הוצאות'],['suppliers','ספקים'],['reports','דוחות ומע״מ'],['settings','הגדרות']];
 let view='dashboard';
 const F={jobs:{st:'open',q:''},docs:{t:'all',q:'',open:false},customers:{q:''},expenses:{cat:'',m:'',q:'',unpaid:false},suppliers:{q:''},reports:null};
-function route(){const h=location.hash.slice(1);view=VIEWS.some(v=>v[0]===h)?h:'dashboard';render()}
-window.addEventListener('hashchange',route);
+function go(v){view=VIEWS.some(x=>x[0]===v)?v:'dashboard';render()}
+function route(){go('dashboard')}
+document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#"]');if(!a)return;e.preventDefault();const v=a.getAttribute('href').slice(1);if(a.dataset.act==='docsOpen'){F.docs.open=true;F.docs.t='305'}closeModal();go(v)},true);
 function renderNav(){
   const ov=openInvoices().filter(d=>daysBetween(invDue(d),today())>0).length;
   const act=all('jobs').filter(j=>['approved','production','ready'].includes(j.status)).length;
@@ -533,7 +525,7 @@ function payRow(p={}){return `<tr><td><select class="pm" aria-label="אמצעי 
 let DF=null;
 function docForm(type,preset={}){
   const s=ST();DF={type,preset};const t=DT[type];const cid=preset.customerId||'';
-  openModal(t.name+' חדשה · מס׳ '+nextNumber(type),`<form id="docF" class="mbody" style="padding:0">
+  openModal(t.name+' חדשה',`<form id="docF" class="mbody" style="padding:0">
   <div class="grid">
     <label class="f span2">לקוח<select id="df_c">${custOpts(cid)}</select></label>
     <label class="f">תאריך<input type="date" id="df_d" value="${esc(preset.date||today())}"></label>
@@ -572,7 +564,7 @@ function docRecalc(){if(!DF||!$('#docF'))return;const s=ST();
   const ps=$('#df_paysum');if(ps){const p=r2(readPays().reduce((a,x)=>a+x.amount,0));ps.textContent=DF.type==='320'?(Math.abs(p-total)<0.01?'התקבולים תואמים לסכום החשבונית':'סה״כ תקבולים '+fmt(p)+' · סכום החשבונית '+fmt(total)):'סה״כ התקבול: '+fmt(p)}
 }
 function submitDoc(){const s=ST(),type=DF.type,cid=$('#df_c').value;if(!cid){toast('בחר לקוח');return}
-  const c=S.customers[cid];const d={id:uid(),type,number:nextNumber(type),date:$('#df_d').value||today(),customerId:cid,customerName:c.name,customerTaxId:c.taxId||'',customerAddress:c.address||'',vatRate:s.vatRate,notes:$('#df_notes').value.trim(),createdAt:new Date().toISOString()};
+  const c=S.customers[cid];const d={id:uid(),type,number:0,date:$('#df_d').value||today(),customerId:cid,customerName:c.name,customerTaxId:c.taxId||'',customerAddress:c.address||'',vatRate:s.vatRate,notes:$('#df_notes').value.trim(),createdAt:new Date().toISOString()};
   if(type!=='400'){d.lines=readLines();d.discount=r2(($('#df_disc')||{}).value);if(!d.lines.length){toast('הוסף לפחות שורת פריט אחת');return}if($('#df_allocno'))d.allocation=$('#df_allocno').value.trim()}
   if(type==='305')d.dueDate=$('#df_due').value||d.date;
   if(type==='330'){d.refDocId=$('#df_ref').value||''}
@@ -581,8 +573,11 @@ function submitDoc(){const s=ST(),type=DF.type,cid=$('#df_c').value;if(!cid){toa
   if(type==='400'){d.appliesTo=$$('[data-ap]').filter(x=>x.checked).map(x=>({id:x.dataset.ap,amount:r2($(`[data-apa="${CSS.escape(x.dataset.ap)}"]`).value)})).filter(a=>a.amount>0);
     const tot=docTotal(d),ap=r2(d.appliesTo.reduce((a,x)=>a+x.amount,0));if(ap>tot+0.01){toast('הסכום המשויך גדול מסכום הקבלה');return}}
   const jobIds=$$('[data-job]').filter(x=>x.checked).map(x=>x.dataset.job);if(jobIds.length)d.jobIds=jobIds;
-  put('docs',d);jobIds.forEach(id=>{const j=S.jobs[id];if(j)put('jobs',Object.assign({},j,{status:'billed',invoiceId:d.id}))});
-  closeModal();toast(DT[type].name+' '+d.number+' הופקה');DF=null;setTimeout(()=>viewDoc(d.id),50);
+  const btn=$('#docF .btn.pri');btn.disabled=true;btn.textContent='מפיק…';
+  call('createDoc',serialize('docs',d),clone(s.numbering)).then(saved=>{d.number=saved.number;S.docs[d.id]=d;
+    jobIds.forEach(id=>{const j=S.jobs[id];if(j)put('jobs',Object.assign({},j,{status:'billed',invoiceId:d.id}))});
+    closeModal();toast(DT[type].name+' '+d.number+' הופקה');DF=null;schedule();setTimeout(()=>viewDoc(d.id),50)})
+   .catch(e=>{btn.disabled=false;btn.textContent='נסה שוב';toast('ההפקה נכשלה: '+(e&&e.message||''))});
 }
 function docHTML(d){const b=ST().business;const t=DT[d.type];const net=docNet(d),vat=docVat(d),tot=docTotal(d);const ref=d.refDocId&&S.docs[d.refDocId];
   const st='font-family:Assistant,Arial,sans-serif;color:#14181E';
@@ -605,10 +600,10 @@ function viewDoc(id){const d=S.docs[id];if(!d)return;const t=DT[d.type];
   <div class="mfoot">${d.sample?`<button class="btn danger" data-act="delete" data-col="docs" data-id="${esc(d.id)}" style="margin-inline-end:auto">מחיקת מסמך דוגמה</button>`:''}
   ${(d.type==='305'||d.type==='320')?`<button class="btn" data-act="creditDoc" data-id="${esc(d.id)}">ביטול בחשבונית זיכוי</button>`:''}
   ${open>0.009?`<button class="btn" data-act="newDoc" data-type="400" data-inv="${esc(d.id)}">רישום תשלום (קבלה)</button>`:''}
-  <button class="btn" data-act="copyDoc" data-id="${esc(d.id)}">העתק כטקסט</button><button class="btn pri" data-act="dlDoc" data-id="${esc(d.id)}">הורדה להדפסה</button></div>`,{wide:true})}
+  <button class="btn" data-act="copyDoc" data-id="${esc(d.id)}">העתק כטקסט</button><button class="btn pri" data-act="dlDoc" data-id="${esc(d.id)}">הדפסה / PDF</button></div>`,{wide:true})}
 
 /* ---------- customers ---------- */
-SHELL.customers=()=>`${head('לקוחות','יתרות, מחזור ותנאי תשלום',`<button class="btn" data-act="csvCustomers">ייצוא ל־Excel</button><button class="btn pri" data-act="newCustomer">לקוח חדש</button>`)}<div class="tools"><input class="search" id="cq" type="search" placeholder="חיפוש לקוח" value="${esc(F.customers.q)}"></div><div id="vb"></div>`;
+SHELL.customers=()=>`${head('לקוחות','יתרות, מחזור ותנאי תשלום',`<button class="btn" data-act="csvCustomers">ייצוא ללשונית דוח</button><button class="btn pri" data-act="newCustomer">לקוח חדש</button>`)}<div class="tools"><input class="search" id="cq" type="search" placeholder="חיפוש לקוח" value="${esc(F.customers.q)}"></div><div id="vb"></div>`;
 BODY.customers=()=>{const y=new Date().getFullYear();const[a,b]=[y+'-01-01',y+'-12-31'];let list=all('customers');const q=F.customers.q.toLowerCase();if(q)list=list.filter(c=>(c.name+' '+(c.contact||'')+' '+(c.phone||'')+' '+(c.taxId||'')).toLowerCase().includes(q));
   const rows=list.map(c=>{let turn=0;docs().forEach(d=>{if(d.customerId!==c.id||!inRange(d.date,a,b))return;if(d.type==='305'||d.type==='320')turn+=docNet(d);if(d.type==='330')turn-=docNet(d)});return{c,turn:r2(turn),bal:custBalance(c.id)}}).sort((p,q)=>q.turn-p.turn);
   return `${sampleBanner()}<div class="tbl"><table><thead><tr><th>לקוח</th><th>ח.פ / ע.מ</th><th>איש קשר</th><th>טלפון</th><th>תנאי תשלום</th><th class="n">מחזור ${y}</th><th class="n">יתרה לתשלום</th></tr></thead><tbody>${rows.map(({c,turn,bal})=>`<tr class="click" data-act="custCard" data-id="${esc(c.id)}"><td><b>${esc(c.name)}</b>${c.sample?' <span class="pill p-neutral">דוגמה</span>':''}</td><td class="num">${esc(c.taxId||'')}</td><td>${esc(c.contact||'')}</td><td class="num" dir="ltr" style="text-align:end">${esc(c.phone||'')}</td><td>${termName(c.terms)}</td><td class="n">${fmt(turn)}</td><td class="n" style="font-weight:700;color:${bal>0?'var(--bad)':bal<0?'var(--good)':'inherit'}">${fmt(bal)}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">אין לקוחות עדיין</td></tr>'}</tbody></table></div>`};
@@ -628,7 +623,7 @@ function custCard(id){const c=S.customers[id];if(!c)return;const ds=docs().filte
 
 /* ---------- expenses ---------- */
 SHELL.expenses=()=>{const ms=[];const n=new Date();for(let i=0;i<18;i++){const d=new Date(n.getFullYear(),n.getMonth()-i,1);ms.push([d.getFullYear()+'-'+pad(d.getMonth()+1),MONTHS[d.getMonth()]+' '+d.getFullYear()])}
- return `${head('הוצאות','קניות, ספקים ותשלומים · מע״מ תשומות מחושב לפי סוג ההוצאה',`<button class="btn" data-act="csvExpenses">ייצוא ל־Excel</button><button class="btn pri" data-act="newExpense">הוצאה חדשה</button>`)}
+ return `${head('הוצאות','קניות, ספקים ותשלומים · מע״מ תשומות מחושב לפי סוג ההוצאה',`<button class="btn" data-act="csvExpenses">ייצוא ללשונית דוח</button><button class="btn pri" data-act="newExpense">הוצאה חדשה</button>`)}
  <div class="tools"><select id="ef_m" style="width:auto"><option value="">כל החודשים</option>${ms.map(m=>`<option value="${m[0]}" ${F.expenses.m===m[0]?'selected':''}>${m[1]}</option>`).join('')}</select><select id="ef_c" style="width:auto"><option value="">כל הקטגוריות</option>${CATS.map(c=>`<option value="${c[0]}" ${F.expenses.cat===c[0]?'selected':''}>${c[1]}</option>`).join('')}</select><label class="chk"><input type="checkbox" id="ef_u" ${F.expenses.unpaid?'checked':''}> רק שלא שולמו</label><input class="search" id="eq" type="search" placeholder="חיפוש ספק או תיאור" value="${esc(F.expenses.q)}"></div><div id="vb"></div>`};
 const supName=e=>(S.suppliers[e.supplierId]||{}).name||e.supplierName||'';
 BODY.expenses=()=>{const f=F.expenses;let list=all('expenses');if(f.m)list=list.filter(e=>e.date.startsWith(f.m));if(f.cat)list=list.filter(e=>e.category===f.cat);if(f.unpaid)list=list.filter(e=>!e.paid);if(f.q){const q=f.q.toLowerCase();list=list.filter(e=>(supName(e)+' '+(e.desc||'')+' '+(e.docNo||'')).toLowerCase().includes(q))}
@@ -673,7 +668,7 @@ function defaultPeriod(){const p=vatPeriodOf(today());return{kind:ST().vatPeriod
 function periodRange(P){if(P.kind==='year')return{a:P.y+'-01-01',b:P.y+'-12-31',label:'שנת '+P.y};let f=P.i,t=P.i;if(P.kind==='bi'){f=P.i-(P.i%2);t=f+1}if(P.kind==='q'){f=P.i-(P.i%3);t=f+2}return{a:monthRange(P.y,f)[0],b:monthRange(P.y,t)[1],label:periodLabel({y:P.y,from:f,to:t})}}
 SHELL.reports=()=>{if(!F.reports)F.reports=defaultPeriod();const P=F.reports;const yrs=[];const cy=new Date().getFullYear();for(let y=cy;y>=cy-4;y--)yrs.push(y);
   let idx='';if(P.kind==='mon')idx=MONTHS.map((m,i)=>`<option value="${i}" ${i===P.i?'selected':''}>${m}</option>`).join('');if(P.kind==='bi')idx=[0,2,4,6,8,10].map(i=>`<option value="${i}" ${i===P.i-(P.i%2)?'selected':''}>${MONTHS[i]}–${MONTHS[i+1]}</option>`).join('');if(P.kind==='q')idx=[0,3,6,9].map((i,k)=>`<option value="${i}" ${i===P.i-(P.i%3)?'selected':''}>רבעון ${k+1}</option>`).join('');
-  return `${head('דוחות ומע״מ','רווח והפסד, דוח מע״מ, מקדמות מס הכנסה, תזרים וגיול חובות',`<button class="btn" data-act="csvAll">ייצוא כל המסמכים ל־Excel</button>`)}
+  return `${head('דוחות ומע״מ','רווח והפסד, דוח מע״מ, מקדמות מס הכנסה, תזרים וגיול חובות',`<button class="btn" data-act="csvAll">כל המסמכים ללשונית דוח</button>`)}
   <div class="tools"><div class="seg">${[['mon','חודש'],['bi','דו־חודשי'],['q','רבעון'],['year','שנה']].map(([k,n])=>`<button data-act="rkind" data-v="${k}" aria-pressed="${P.kind===k}">${n}</button>`).join('')}</div><select id="r_y" style="width:auto">${yrs.map(y=>`<option ${y===P.y?'selected':''}>${y}</option>`).join('')}</select>${idx?`<select id="r_i" style="width:auto">${idx}</select>`:''}</div><div id="vb"></div>`};
 BODY.reports=()=>{const P=F.reports;const R=periodRange(P);const s=ST();const inc=income(R.a,R.b),ex=expenses(R.a,R.b);const profit=r2(inc.net-ex.cost);
   const vatOut=inc.vat,vatIn=r2(ex.recA+ex.recO),vatNet=r2(vatOut-vatIn);const adv=r2(inc.net*s.advanceRate/100);
@@ -719,7 +714,7 @@ SHELL.settings=()=>{const s=ST(),b=s.business;return `${head('הגדרות','פ�
   <h3 style="margin:18px 0 8px">סוגי נייר (מחיר לגיליון)</h3><div class="tbl"><table class="lines"><thead><tr><th>שם</th><th>מחיר לגיליון</th><th></th></tr></thead><tbody id="s_papers">${s.papers.map(p=>`<tr data-id="${esc(p.id)}"><td><input class="pn" value="${esc(p.name)}" aria-label="שם נייר"></td><td style="width:140px"><input class="pp" type="number" step="0.01" value="${p.price}" aria-label="מחיר"></td><td style="width:36px"><button type="button" class="icon" data-act="rmRow" aria-label="הסר">×</button></td></tr>`).join('')}</tbody></table></div><button type="button" class="btn sm ghost" data-act="addPaper" style="margin-top:6px">+ סוג נייר</button>
   <h3 style="margin:18px 0 8px">פעולות גימור</h3><div class="tbl"><table class="lines"><thead><tr><th>שם</th><th>חיוב</th><th>מחיר</th><th>עלות הכנה</th><th></th></tr></thead><tbody id="s_fins">${s.finishings.map(finRow).join('')}</tbody></table></div><button type="button" class="btn sm ghost" data-act="addFin" style="margin-top:6px">+ פעולת גימור</button>
   <div class="mfoot" style="margin-top:18px"><button class="btn pri">שמירת הגדרות</button></div></form>
- <div class="panel"><h2>גיבוי ונתונים</h2><p class="note">מומלץ להוריד גיבוי מלא פעם בחודש ולשמור אותו אצל רואה החשבון.</p><div class="tools"><button class="btn" data-act="backup">הורדת גיבוי (JSON)</button><label class="btn">שחזור מגיבוי<input type="file" id="restore" accept=".json,application/json" hidden></label><button class="btn danger" data-act="wipe">מחיקת כל הנתונים</button></div><p class="note" style="margin-top:8px">${mode==='cloud'?'הנתונים נשמרים בענן ונגישים מכל מכשיר שבו פותחים את הדף.':'מצב מקומי: הנתונים נשמרים בדפדפן הזה בלבד.'}</p></div>`};
+ <div class="panel"><h2>הנתונים בגיליון</h2><p class="note">כל הנתונים נשמרים בלשוניות של הגיליון: לקוחות, ספקים, עבודות, מסמכים והוצאות. אפשר לעיין ולערוך גם שם, אבל לא לשנות את הכותרות בשורה 1 ולא את עמודת "מזהה". לגיבוי: בגיליון, קובץ ← יצירת עותק.</p><div class="tools">${S.sheetUrl?`<a class="btn" href="${esc(S.sheetUrl)}" target="_blank" rel="noopener">פתיחת הגיליון</a>`:''}<button class="btn" data-act="refresh">רענון נתונים מהגיליון</button></div></div>`};
 function finRow(f){f=f||{id:uid(),name:'',unit:'unit',price:0,setup:0};return `<tr data-id="${esc(f.id)}"><td><input class="fn" value="${esc(f.name)}" aria-label="שם"></td><td style="width:130px"><select class="fu" aria-label="חיוב">${Object.entries(UNIT).map(([k,v])=>`<option value="${k}" ${k===f.unit?'selected':''}>${v}</option>`).join('')}</select></td><td style="width:110px"><input class="fp" type="number" step="0.01" value="${f.price}" aria-label="מחיר"></td><td style="width:110px"><input class="fs" type="number" step="1" value="${f.setup||0}" aria-label="עלות הכנה"></td><td style="width:36px"><button type="button" class="icon" data-act="rmRow" aria-label="הסר">×</button></td></tr>`}
 function submitSettings(){const g=id=>$('#'+id).value;const s=clone(ST());
   Object.assign(s.business,{name:g('s_name').trim(),kind:g('s_kind'),taxId:g('s_tax').trim(),address:g('s_addr').trim(),phone:g('s_phone').trim(),email:g('s_email').trim(),bank:g('s_bank').trim()});
@@ -753,7 +748,7 @@ document.addEventListener('click',async e=>{const el=e.target.closest('[data-act
   case 'newDoc':{const t=el.dataset.type;const pre={};if(el.dataset.cust)pre.customerId=el.dataset.cust;if(el.dataset.inv){const inv=S.docs[el.dataset.inv];pre.customerId=inv.customerId;pre.invId=inv.id}closeModal();docForm(t,pre);break}
   case 'creditDoc':{const d=S.docs[id];closeModal();docForm('330',{customerId:d.customerId,refDocId:d.id,lines:clone(d.lines||[]),notes:'ביטול '+DT[d.type].name+' '+d.number});break}
   case 'viewDoc':viewDoc(id);break;
-  case 'dlDoc':{const d=S.docs[id];const html=`<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><title>${esc(DT[d.type].name+' '+d.number)}</title><style>body{margin:30px;font-family:Assistant,Arial,sans-serif}@media print{body{margin:0}}</style></head><body>${docHTML(d)}</body></html>`;saveFile(`${DT[d.type].name.replace(/[\/]/g,'-')} ${d.number}.html`,html);break}
+  case 'dlDoc':{const d=S.docs[id];printHTML(DT[d.type].name+' '+d.number,docHTML(d));break}
   case 'copyDoc':{const d=S.docs[id];const t=`${DT[d.type].name} ${d.number}\nתאריך: ${dfmt(d.date)}\nלכבוד: ${d.customerName}\n`+(d.lines||[]).map(l=>`${l.desc} · ${l.qty} × ${fmt(l.price)}`).join('\n')+`\nסה״כ: ${fmt(docTotal(d))}`;copyText(t);break}
   case 'addLine':$('#df_lines').insertAdjacentHTML('beforeend',lineRow());break;
   case 'addPay':$('#df_pays').insertAdjacentHTML('beforeend',payRow());break;
@@ -761,7 +756,7 @@ document.addEventListener('click',async e=>{const el=e.target.closest('[data-act
   case 'addPaper':$('#s_papers').insertAdjacentHTML('beforeend',`<tr data-id="${uid()}"><td><input class="pn" aria-label="שם נייר"></td><td><input class="pp" type="number" step="0.01" value="0" aria-label="מחיר"></td><td><button type="button" class="icon" data-act="rmRow" aria-label="הסר">×</button></td></tr>`);break;
   case 'addFin':$('#s_fins').insertAdjacentHTML('beforeend',finRow());break;
   case 'saveQuote':{readQ();const r=computeQ();if(!Q.customerId){toast('בחר לקוח כדי לשמור הצעה');$('#q_cust').focus();break}
-    put('jobs',{id:uid(),number:nextJobNo(),date:today(),customerId:Q.customerId,title:r.title,specs:r.specs,qty:Q.qty,price:r.price,estCost:r2(r.cost),status:'quote',calc:clone(Q)});toast('ההצעה נשמרה בעבודות');location.hash='jobs';break}
+    put('jobs',{id:uid(),number:nextJobNo(),date:today(),customerId:Q.customerId,title:r.title,specs:r.specs,qty:Q.qty,price:r.price,estCost:r2(r.cost),status:'quote',calc:clone(Q)});toast('ההצעה נשמרה בעבודות');go('jobs');break}
   case 'copyQuote':{readQ();const r=computeQ();const b=ST().business;copyText(`הצעת מחיר${b.name?' מ'+b.name:''}\n${r.title}\n${r.specs}\n\nמחיר: ${fmt(r.price)} + מע״מ (${fmt(r.total)} כולל מע״מ)\nמחיר ליחידה: ${fmt(r.unit)}\nההצעה בתוקף ל־14 יום.`);break}
   case 'rkind':{F.reports.kind=el.dataset.v;render();break}
   case 'delete':case 'clearSample':case 'wipe':{
@@ -770,6 +765,7 @@ document.addEventListener('click',async e=>{const el=e.target.closest('[data-act
     if(a==='clearSample'){COLS.forEach(c=>all(c).filter(x=>x.sample).forEach(x=>del(c,x.id)));toast('נתוני הדוגמה נמחקו')}
     if(a==='wipe'){COLS.forEach(c=>all(c).forEach(x=>del(c,x.id)));toast('כל הנתונים נמחקו')}
     break}
+  case 'refresh':refresh(true);break;
   case 'copyta':{const t=$('#cpy');copyText(t.value);break}
   case 'backup':saveFile('גיבוי-כספים-'+today()+'.json',JSON.stringify({version:1,exported:new Date().toISOString(),settings:S.settings,...Object.fromEntries(COLS.map(c=>[c,all(c)]))},null,1));break;
   case 'statement':{const c=S.customers[id];let bal=0;const rows=[['תאריך','מסמך','מספר','חובה','זכות','יתרה']];docs().filter(d=>d.customerId===id).sort((a,b)=>a.date.localeCompare(b.date)).forEach(d=>{let dr=0,cr=0;if(d.type==='305')dr=docTotal(d);if(d.type==='330'||d.type==='400')cr=docTotal(d);if(d.type==='320'){dr=docTotal(d);cr=docTotal(d)}bal+=dr-cr;rows.push([dfmt(d.date),DT[d.type].name,d.number,dr||'',cr||'',r2(bal)])});saveFile('כרטסת '+c.name+'.csv',csv(rows));break}
@@ -819,5 +815,4 @@ document.addEventListener('input',e=>{if(e.target.closest&&e.target.closest('#se
 
 route();initStore();
 </script>
-
 </body></html>
